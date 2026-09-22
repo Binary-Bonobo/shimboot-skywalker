@@ -1,15 +1,11 @@
-name: build-image-a
-run-name: Build the shimboot disk image for all boards
-on: [push]
+name: build-image
+run-name: Build the shimboot disk image for skywalker only
+on: [push, workflow_dispatch]
 
 jobs:
   build:
     permissions:
       contents: write
-
-    strategy: 
-      matrix:
-        board: [dedede, octopus, coral, grunt, nissa, zork, corsola, jacuzzi, hatch, snappy, hana, skywalker]
 
     runs-on: ubuntu-latest
     steps:
@@ -30,44 +26,38 @@ jobs:
       - name: download repo
         uses: actions/checkout@v4
 
-      - name: Run Skywalker Pre-Build (Pussla ihop kernel)
-        if: matrix.board == 'skywalker'
+      - name: Pussla ihop kernel och bygg för Skywalker
         run: |
           # Sätter ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
           cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # Installera de basverktyg som behövs för manuell sammansättning
+          # Installera de basverktyg som behövs för bygget i Ubuntu-miljön
           sudo apt-get update
           sudo apt-get install -y jq wget unzip curl zip debootstrap binwalk cpio vboot-utils cgpt
           
-          # Hämta en fungerande MediaTek-shim som bas (t.ex. jacuzzi)
+          # Skapa datamappen där filerna ska ligga
           mkdir -p data/rootfs
+          
+          # Hämta en fungerande MediaTek-shim som hårdvarubas (jacuzzi matchar MT8183/8189-arkitekturen bäst)
           wget -q https://cros.download -O data/fallback_shim.zip
           unzip -o data/fallback_shim.zip -d data/
           FALLBACK_BIN=$(find data/ -name "*.bin" ! -name "reco_*" | head -n 1)
           
-          # Bygg om rootfs manuellt för skywalker
+          # Kör Shimboots egna byggskript med din lokala Skywalker-kernel
           sudo ./build_rootfs.sh data/rootfs bookworm
           sudo ./patch_rootfs.sh "$FALLBACK_BIN" my_skywalker_kernel.kpart data/rootfs
           sudo ./build.sh data/shimboot_skywalker.bin "$FALLBACK_BIN" data/rootfs
           
-          # Packa filen till en zip-fil för release-steget
+          # Packa till en zip-fil för eventuella releases
           cd data && zip -7 shimboot_skywalker.zip shimboot_skywalker.bin && cd ..
-
-      - name: run build for standard boards
-        if: matrix.board != 'skywalker'
-        run: |
-          sudo apt-get update
-          sudo apt-get upgrade -y
-          sudo DEBUG=1 ./build_complete.sh ${{ matrix.board }} compress_img=1 quiet=1
 
       - name: upload img
         uses: actions/upload-artifact@v4
         with:
-          name: shimboot_${{ matrix.board }}
+          name: shimboot_skywalker
           path: |
-            data/shimboot_${{ matrix.board }}.bin
-            data/shimboot_${{ matrix.board }}.zip
+            data/shimboot_skywalker.bin
+            data/shimboot_skywalker.zip
           compression-level: 7
   
       - name: create release
@@ -76,5 +66,5 @@ jobs:
         with:
           draft: true
           files: |
-            data/shimboot_${{ matrix.board }}.zip
-            data/shimboot_${{ matrix.board }}.bin
+            data/shimboot_skywalker.zip
+            data/shimboot_skywalker.bin
