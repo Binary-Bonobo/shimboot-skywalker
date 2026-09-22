@@ -31,38 +31,37 @@ jobs:
           # 1. Pussla ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
           cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # 2. Installera ALLA beroenden för Shimboot, vboot och cross-compiling för ARM
-          sudo apt-get update
-          sudo apt-get install -y \
-            jq wget unzip curl zip pv parted debootstrap systemd-container \
-            pcregrep cgpt vboot-kernel-utils vboot-utils qemu-user-static \
-            binfmt-support arch-test dosfstools e2fsprogs apt-file binwalk \
-            cpio lz4 git coreboot-utils flashrom mtd-utils
+          # 2. Installera verktyg med automatiskt skydd mot nätverksavbrott (retry)
+          sudo apt-get update || true
+          for i in {1..5}; do
+            sudo apt-get install -y \
+              jq wget unzip curl zip pv parted debootstrap systemd-container \
+              pcregrep cgpt vboot-kernel-utils vboot-utils qemu-user-static \
+              binfmt-support arch-test dosfstools e2fsprogs apt-file binwalk \
+              cpio lz4 git coreboot-utils flashrom mtd-utils && break || sleep 15
+          done
           
           sudo apt-file update || true
 
           # 3. Skapa arbetskataloger
           mkdir -p data/rootfs
           
-          # 4. Generera en helt tom, skräddarsydd diskavbildning för Skywalker (8GB bas)
+          # 4. Generera en tom diskavbildning för Skywalker (8GB bas)
           truncate -s 8G data/shimboot_skywalker.bin
           
-          # 5. Skapa en giltig ChromeOS partitionstabell (GPT) från grunden
+          # 5. Skapa en giltig ChromeOS partitionstabell (GPT)
           sudo cgpt create data/shimboot_skywalker.bin
           sudo cgpt boot -p data/shimboot_skywalker.bin
           
-          # Skapa KERN-A (Partition 2) - Detta är din bootloader
+          # Skapa KERN-A (Partition 2) och ROOT-A (Partition 3)
           sudo cgpt add -b 34 -s 65536 -t kernel -l "KERN-A" data/shimboot_skywalker.bin
-          # Skapa ROOT-A (Partition 3) - Detta blir Linux-systemet
           sudo cgpt add -b 65570 -s 15000000 -t rootfs -l "shimboot_rootfs:main" data/shimboot_skywalker.bin
-          
-          # Läs in partitionstabellen i systemet så loop-enheter kan skapas
           sudo parted -s data/shimboot_skywalker.bin mktable gpt
           
-          # 6. Bygg operativsystemets basfiler (Debian Bookworm ARM64)
-          sudo ./build_rootfs.sh data/rootfs bookworm
+          # 6. Bygg operativsystemets basfiler (Dämpar loggtexten med quiet-läge för att undvika overflow)
+          sudo ./build_rootfs.sh data/rootfs bookworm > /dev/null
           
-          # 7. Dev-signera din dumpade kernel så att den accepteras av Depthcharge utan officiella Google-nycklar
+          # 7. Dev-signera din dumpade kernel
           sudo vbutil_kernel \
             --pack data/signed_skywalker_kernel.kpart \
             --keyblock /usr/share/vboot/devkeys/kernel.keyblock \
@@ -73,13 +72,10 @@ jobs:
             --config /dev/null \
             --arch arm
           
-          # 8. Montera diskavbildningen och skriv systemet till partitionerna manuellt
+          # 8. Montera diskavbildningen och skriv systemet till partitionerna
           LOOP_DEV=$(sudo losetup --show -f -P data/shimboot_skywalker.bin)
-          
-          # Skriv den dev-signerade kerneln till KERN-A (partition 2)
           sudo dd if=data/signed_skywalker_kernel.kpart of=${LOOP_DEV}p2 bs=4M conv=fdatasync
           
-          # Formatera och skriv Linux-filsystemet till ROOT-A (partition 3)
           sudo mkfs.ext4 -F ${LOOP_DEV}p3
           sudo mkdir -p /mnt/target
           sudo mount ${LOOP_DEV}p3 /mnt/target
@@ -87,7 +83,7 @@ jobs:
           sudo umount /mnt/target
           sudo losetup -d ${LOOP_DEV}
           
-          # 9. Sätt boot-prioritet till KERN-A så att Chromebooken väljer USB-systemet direkt
+          # 9. Sätt boot-prioritet till KERN-A
           sudo cgpt add -i 2 -S 1 -T 5 -P 10 data/shimboot_skywalker.bin
           
           # Packa till en zip-fil för nedladdning
@@ -101,12 +97,3 @@ jobs:
             data/shimboot_skywalker.bin
             data/shimboot_skywalker.zip
           compression-level: 7
-  
-      - name: create release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          draft: true
-          files: |
-            data/shimboot_skywalker.zip
-            data/shimboot_skywalker.bin
