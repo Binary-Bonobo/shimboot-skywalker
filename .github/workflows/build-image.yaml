@@ -50,13 +50,15 @@ jobs:
           mkdir -p data/rootfs
           
           # 5. Tvinga byggmiljön att ignorera systemd/chroot-fel under genereringen
-          # Vi modifierar skripten live så de tillåter att kill-frecon och chroot-tjänster misslyckas på servern
           sed -i 's/set -e/set +e/g' *.sh 2>/dev/null || true
           
           # 6. Bygg operativsystemets basfiler (Dämpar loggtexten)
           sudo ./build_rootfs.sh data/rootfs bookworm > /dev/null || true
 
-          # 7. Dev-signera din dumpade kernel så att den accepteras av Depthcharge
+          # 7. Skapa en tom temporärfil för konfigurationen så att vbutil_kernel inte klagar
+          touch data/empty_config.txt
+
+          # 8. Dev-signera din dumpade kernel med den tomma konfigurationsfilen
           sudo vbutil_kernel \
             --pack data/signed_skywalker_kernel.kpart \
             --keyblock /usr/share/vboot/devkeys/kernel.keyblock \
@@ -64,10 +66,10 @@ jobs:
             --version 1 \
             --vmlinuz my_skywalker_kernel.kpart \
             --bootloader /dev/null \
-            --config /dev/null \
+            --config data/empty_config.txt \
             --arch arm
 
-          # 8. Generera diskavbildningen (Om build.sh kastar ett ofarligt systemd-slutstatus, gå vidare ändå)
+          # 9. Generera diskavbildningen via build.sh direkt
           sudo ./build.sh data/shimboot_skywalker.bin data/signed_skywalker_kernel.kpart data/rootfs || true
 
           # Verifiera att filen faktiskt skapades innan vi zippar
@@ -75,7 +77,6 @@ jobs:
             echo ">>> Avbildningen skapad! Packar zip..."
             cd data && zip -7 shimboot_skywalker.zip shimboot_skywalker.bin && cd ..
           else
-            # Om build.sh placerade den i rotkatalogen istället för data/
             if [ -f shimboot_skywalker.bin ]; then
               echo ">>> Avbildningen hittad i roten! Flyttar och packar..."
               mkdir -p data
