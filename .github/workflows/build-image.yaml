@@ -33,14 +33,14 @@ jobs:
           # 1. Pussla ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
           cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # 2. Installera nödvändiga grundverktyg
+          # 2. Installera ENDAST de absolut nödvändigaste paketen utan rekommenderat extrakt
           sudo apt-get update || true
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             jq wget unzip curl zip pv parted debootstrap systemd-container \
             pcregrep cgpt vboot-kernel-utils vboot-utils binfmt-support \
-            arch-test dosfstools e2fsprogs apt-file binwalk cpio lz4
+            arch-test dosfstools e2fsprogs binwalk cpio lz4
 
-          # 3. Hämta enbart den specifika ARM64-binären manuellt för chroot-byggaren
+          # 3. Hämta enbart den specifika ARM64-binären manuellt för chroot-miljön
           sudo mkdir -p /usr/bin
           sudo wget -q https://github.com -O /usr/bin/qemu-aarch64-static
           sudo chmod +x /usr/bin/qemu-aarch64-static
@@ -49,17 +49,17 @@ jobs:
           # 4. Skapa arbetskataloger
           mkdir -p data/rootfs
           
-          # 5. Tvinga byggmiljön att ignorera systemd/chroot-fel under genereringen
+          # 5. Tvinga byggmiljön och skripten att ignorera dolda chroot/systemd-varningar
           sed -i 's/set -e/set +e/g' *.sh 2>/dev/null || true
           
           # 6. Bygg operativsystemets basfiler (Debian Bookworm ARM64)
           sudo ./build_rootfs.sh data/rootfs bookworm > /dev/null || true
 
           # 7. Generera diskavbildningen direkt via build.sh 
-          # Vi skickar din råa dumpade kpart direkt till skriptet. Den är redan signerad och klar.
+          # Din råa dumpade kpart skickas direkt in i slutbakningen
           sudo ./build.sh data/shimboot_skywalker.bin my_skywalker_kernel.kpart data/rootfs || true
 
-          # Verifiera att filen faktiskt skapades innan vi zippar
+          # Verifiera att filen faktiskt skapades innan den zippas
           if [ -f data/shimboot_skywalker.bin ]; then
             echo ">>> Avbildningen skapad! Packar zip..."
             cd data && zip -7 shimboot_skywalker.zip shimboot_skywalker.bin && cd ..
