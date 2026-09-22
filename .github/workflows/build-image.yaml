@@ -1,5 +1,5 @@
 name: build-image
-run-name: Build custom self-generated dev-signed shim for skywalker
+run-name: Build custom self-generated dev-signed shim for skywalker only
 on: [push, workflow_dispatch]
 
 jobs:
@@ -31,9 +31,15 @@ jobs:
           # 1. Pussla ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
           cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # 2. Installera de arkitektur- och signeringsverktyg som behövs
+          # 2. Installera ALLA beroenden för Shimboot, vboot och cross-compiling för ARM
           sudo apt-get update
-          sudo apt-get install -y jq wget unzip curl zip debootstrap binwalk cpio vboot-utils cgpt parted dosfstools e2fsprogs
+          sudo apt-get install -y \
+            jq wget unzip curl zip pv parted debootstrap systemd-container \
+            pcregrep cgpt vboot-kernel-utils vboot-utils qemu-user-static \
+            binfmt-support arch-test dosfstools e2fsprogs apt-file binwalk \
+            cpio lz4 git coreboot-utils flashrom mtd-utils
+          
+          sudo apt-file update || true
 
           # 3. Skapa arbetskataloger
           mkdir -p data/rootfs
@@ -57,7 +63,6 @@ jobs:
           sudo ./build_rootfs.sh data/rootfs bookworm
           
           # 7. Dev-signera din dumpade kernel så att den accepteras av Depthcharge utan officiella Google-nycklar
-          # Vi använder standardutvecklarnycklarna (devkeys) som finns inbyggda i vboot-utils
           sudo vbutil_kernel \
             --pack data/signed_skywalker_kernel.kpart \
             --keyblock /usr/share/vboot/devkeys/kernel.keyblock \
@@ -96,3 +101,12 @@ jobs:
             data/shimboot_skywalker.bin
             data/shimboot_skywalker.zip
           compression-level: 7
+  
+      - name: create release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          draft: true
+          files: |
+            data/shimboot_skywalker.zip
+            data/shimboot_skywalker.bin
