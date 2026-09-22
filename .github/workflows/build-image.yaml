@@ -33,14 +33,14 @@ jobs:
           # 1. Pussla ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
           cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # 2. Installera verktyg
+          # 2. Installera nödvändiga grundverktyg
           sudo apt-get update || true
           sudo apt-get install -y \
             jq wget unzip curl zip pv parted debootstrap systemd-container \
             pcregrep cgpt vboot-kernel-utils vboot-utils binfmt-support \
             arch-test dosfstools e2fsprogs apt-file binwalk cpio lz4
 
-          # 3. Hämta enbart den specifika ARM64-binären manuellt
+          # 3. Hämta enbart den specifika ARM64-binären manuellt för chroot-byggaren
           sudo mkdir -p /usr/bin
           sudo wget -q https://github.com -O /usr/bin/qemu-aarch64-static
           sudo chmod +x /usr/bin/qemu-aarch64-static
@@ -52,25 +52,12 @@ jobs:
           # 5. Tvinga byggmiljön att ignorera systemd/chroot-fel under genereringen
           sed -i 's/set -e/set +e/g' *.sh 2>/dev/null || true
           
-          # 6. Bygg operativsystemets basfiler (Dämpar loggtexten)
+          # 6. Bygg operativsystemets basfiler (Debian Bookworm ARM64)
           sudo ./build_rootfs.sh data/rootfs bookworm > /dev/null || true
 
-          # 7. Skapa en tom temporärfil för konfigurationen så att vbutil_kernel inte klagar
-          touch data/empty_config.txt
-
-          # 8. Dev-signera din dumpade kernel med den tomma konfigurationsfilen
-          sudo vbutil_kernel \
-            --pack data/signed_skywalker_kernel.kpart \
-            --keyblock /usr/share/vboot/devkeys/kernel.keyblock \
-            --signprivate /usr/share/vboot/devkeys/kernel_data_key.vbprivk \
-            --version 1 \
-            --vmlinuz my_skywalker_kernel.kpart \
-            --bootloader /dev/null \
-            --config data/empty_config.txt \
-            --arch arm
-
-          # 9. Generera diskavbildningen via build.sh direkt
-          sudo ./build.sh data/shimboot_skywalker.bin data/signed_skywalker_kernel.kpart data/rootfs || true
+          # 7. Generera diskavbildningen direkt via build.sh 
+          # Vi skickar din råa dumpade kpart direkt till skriptet. Den är redan signerad och klar.
+          sudo ./build.sh data/shimboot_skywalker.bin my_skywalker_kernel.kpart data/rootfs || true
 
           # Verifiera att filen faktiskt skapades innan vi zippar
           if [ -f data/shimboot_skywalker.bin ]; then
