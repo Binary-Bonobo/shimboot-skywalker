@@ -1,5 +1,5 @@
 name: build-image
-run-name: Build custom self-generated dev-signed shim for skywalker only
+run-name: Build custom self-generated dev-signed hash for skywalker only
 on: [push, workflow_dispatch]
 
 jobs:
@@ -17,11 +17,13 @@ jobs:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 4096
+          root-reserve-mb: 1024
           swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
 
       - name: download repo
         uses: actions/checkout@v4
@@ -31,20 +33,28 @@ jobs:
           # 1. Pussla ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
           cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # 2. Installera nödvändiga verktyg
+          # 2. Installera endast de nödvändiga lätta verktygen (Hoppar över qemu-user-static)
           sudo apt-get update || true
           sudo apt-get install -y \
             jq wget unzip curl zip pv parted debootstrap systemd-container \
-            pcregrep cgpt vboot-kernel-utils vboot-utils qemu-user-static \
-            binfmt-support arch-test dosfstools e2fsprogs lz4 cpio
+            pcregrep cgpt vboot-kernel-utils vboot-utils binfmt-support \
+            arch-test dosfstools e2fsprogs apt-file binwalk cpio lz4
 
-          # 3. Skapa arbetskataloger
+          # 3. Hämta ENDAST ARM64-binären manuellt för att spara diskutrymme
+          sudo mkdir -p /usr/bin
+          sudo wget -q https://github.com -O /usr/bin/qemu-aarch64-static
+          sudo chmod +x /usr/bin/qemu-aarch64-static
+          
+          # Registrera binfmt manuellt för ARM64
+          sudo update-binfmts --enable || true
+
+          # 4. Skapa arbetskataloger
           mkdir -p data/rootfs
           
-          # 4. Bygg operativsystemets basfiler (Debian Bookworm ARM64)
+          # 5. Bygg operativsystemets basfiler (Debian Bookworm ARM64)
           sudo ./build_rootfs.sh data/rootfs bookworm > /dev/null
 
-          # 5. Dev-signera din dumpade kernel så att den accepteras av Depthcharge
+          # 6. Dev-signera din dumpade kernel så att den accepteras av Depthcharge
           sudo vbutil_kernel \
             --pack data/signed_skywalker_kernel.kpart \
             --keyblock /usr/share/vboot/devkeys/kernel.keyblock \
@@ -55,8 +65,7 @@ jobs:
             --config /dev/null \
             --arch arm
 
-          # 6. Generera diskavbildningen (Bypassar patch_rootfs.sh för att undvika systemd-kraschen)
-          # Vi kör build.sh direkt för att baka ihop filsystemet och din egen signerade kernel
+          # 7. Generera diskavbildningen via build.sh direkt
           sudo ./build.sh data/shimboot_skywalker.bin data/signed_skywalker_kernel.kpart data/rootfs
 
           # Packa till en zip-fil för nedladdning
