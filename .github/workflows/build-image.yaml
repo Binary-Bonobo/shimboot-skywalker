@@ -26,20 +26,17 @@ jobs:
       - name: download repo
         uses: actions/checkout@v4
 
-      - name: Pussla ihop kernel och bygg egen Skywalker-shim
+      - name: Pussla ihop kernel och bygg ren Skywalker-avbildning
         run: |
           # 1. Pussla ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
           cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # 2. Installera beroenden
+          # 2. Installera nödvändiga verktyg
           sudo apt-get update || true
           sudo apt-get install -y \
             jq wget unzip curl zip pv parted debootstrap systemd-container \
             pcregrep cgpt vboot-kernel-utils vboot-utils qemu-user-static \
-            binfmt-support arch-test dosfstools e2fsprogs apt-file binwalk \
-            cpio lz4 git coreboot-utils flashrom mtd-utils
-          
-          sudo apt-file update || true
+            binfmt-support arch-test dosfstools e2fsprogs lz4 cpio
 
           # 3. Skapa arbetskataloger
           mkdir -p data/rootfs
@@ -58,9 +55,8 @@ jobs:
             --config /dev/null \
             --arch arm
 
-          # 6. Låt Shimboots inbyggda byggverktyg baka ihop komponenterna till den färdiga avbildningen
-          # Vi använder din dev-signerade kpart som bas direkt in i byggskriptet
-          sudo ./patch_rootfs.sh data/signed_skywalker_kernel.kpart data/rootfs || true
+          # 6. Generera diskavbildningen (Bypassar patch_rootfs.sh för att undvika systemd-kraschen)
+          # Vi kör build.sh direkt för att baka ihop filsystemet och din egen signerade kernel
           sudo ./build.sh data/shimboot_skywalker.bin data/signed_skywalker_kernel.kpart data/rootfs
 
           # Packa till en zip-fil för nedladdning
