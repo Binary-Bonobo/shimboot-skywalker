@@ -31,37 +31,23 @@ jobs:
           # 1. Pussla ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
           cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # 2. Installera verktyg med automatiskt skydd mot nätverksavbrott (retry)
+          # 2. Installera beroenden
           sudo apt-get update || true
-          for i in {1..5}; do
-            sudo apt-get install -y \
-              jq wget unzip curl zip pv parted debootstrap systemd-container \
-              pcregrep cgpt vboot-kernel-utils vboot-utils qemu-user-static \
-              binfmt-support arch-test dosfstools e2fsprogs apt-file binwalk \
-              cpio lz4 git coreboot-utils flashrom mtd-utils && break || sleep 15
-          done
+          sudo apt-get install -y \
+            jq wget unzip curl zip pv parted debootstrap systemd-container \
+            pcregrep cgpt vboot-kernel-utils vboot-utils qemu-user-static \
+            binfmt-support arch-test dosfstools e2fsprogs apt-file binwalk \
+            cpio lz4 git coreboot-utils flashrom mtd-utils
           
           sudo apt-file update || true
 
           # 3. Skapa arbetskataloger
           mkdir -p data/rootfs
           
-          # 4. Generera en tom diskavbildning för Skywalker (8GB bas)
-          truncate -s 8G data/shimboot_skywalker.bin
-          
-          # 5. Skapa en giltig ChromeOS partitionstabell (GPT)
-          sudo cgpt create data/shimboot_skywalker.bin
-          sudo cgpt boot -p data/shimboot_skywalker.bin
-          
-          # Skapa KERN-A (Partition 2) och ROOT-A (Partition 3)
-          sudo cgpt add -b 34 -s 65536 -t kernel -l "KERN-A" data/shimboot_skywalker.bin
-          sudo cgpt add -b 65570 -s 15000000 -t rootfs -l "shimboot_rootfs:main" data/shimboot_skywalker.bin
-          sudo parted -s data/shimboot_skywalker.bin mktable gpt
-          
-          # 6. Bygg operativsystemets basfiler (Dämpar loggtexten med quiet-läge för att undvika overflow)
+          # 4. Bygg operativsystemets basfiler (Debian Bookworm ARM64)
           sudo ./build_rootfs.sh data/rootfs bookworm > /dev/null
-          
-          # 7. Dev-signera din dumpade kernel
+
+          # 5. Dev-signera din dumpade kernel så att den accepteras av Depthcharge
           sudo vbutil_kernel \
             --pack data/signed_skywalker_kernel.kpart \
             --keyblock /usr/share/vboot/devkeys/kernel.keyblock \
@@ -71,21 +57,88 @@ jobs:
             --bootloader /dev/null \
             --config /dev/null \
             --arch arm
+
+          # 6. Låt Shimboots inbyggda byggverktyg baka ihop komponenterna till den färdiga avbildningen
+          # Vi använder din dev-signerade kpart som bas direkt in i byggskriptet
+          sudo ./patch_rootfs.sh data/signed_skywalker_kernel.kpart data/rootfs || true
+          sudo ./build.sh data/shimboot_skywalker.bin data/signed_skywalker_kernel.kpart data/rootfs
+
+          # Packa till en zip-fil för nedladdning
+          cd data && zip -7 shimboot_skywalker.zip shimboot_skywalker.bin && cd ..
+
+      - name: upload img
+        uses: actions/upload-artifact@v4
+        with:
+          name: shimboot_skywalker
+          path: |
+            data/shimboot_skywalker.bin
+            data/shimboot_skywalker.zip
+          compression-level: 7
+name: build-image
+run-name: Build custom self-generated dev-signed shim for skywalker only
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    permissions:
+      contents: write
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: remove snap
+        uses: ading2210/gh-actions-remove-snap@v1
+        with:
+          disable_man_db: 'true'
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 4096
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: download repo
+        uses: actions/checkout@v4
+
+      - name: Pussla ihop kernel och bygg egen Skywalker-shim
+        run: |
+          # 1. Pussla ihop dina två uppladdade bitar till den fullständiga 32MB kerneln
+          cat skywalker_chunk_aa skywalker_chunk_ab > my_skywalker_kernel.kpart
           
-          # 8. Montera diskavbildningen och skriv systemet till partitionerna
-          LOOP_DEV=$(sudo losetup --show -f -P data/shimboot_skywalker.bin)
-          sudo dd if=data/signed_skywalker_kernel.kpart of=${LOOP_DEV}p2 bs=4M conv=fdatasync
+          # 2. Installera beroenden
+          sudo apt-get update || true
+          sudo apt-get install -y \
+            jq wget unzip curl zip pv parted debootstrap systemd-container \
+            pcregrep cgpt vboot-kernel-utils vboot-utils qemu-user-static \
+            binfmt-support arch-test dosfstools e2fsprogs apt-file binwalk \
+            cpio lz4 git coreboot-utils flashrom mtd-utils
           
-          sudo mkfs.ext4 -F ${LOOP_DEV}p3
-          sudo mkdir -p /mnt/target
-          sudo mount ${LOOP_DEV}p3 /mnt/target
-          sudo cp -a data/rootfs/* /mnt/target/
-          sudo umount /mnt/target
-          sudo losetup -d ${LOOP_DEV}
+          sudo apt-file update || true
+
+          # 3. Skapa arbetskataloger
+          mkdir -p data/rootfs
           
-          # 9. Sätt boot-prioritet till KERN-A
-          sudo cgpt add -i 2 -S 1 -T 5 -P 10 data/shimboot_skywalker.bin
-          
+          # 4. Bygg operativsystemets basfiler (Debian Bookworm ARM64)
+          sudo ./build_rootfs.sh data/rootfs bookworm > /dev/null
+
+          # 5. Dev-signera din dumpade kernel så att den accepteras av Depthcharge
+          sudo vbutil_kernel \
+            --pack data/signed_skywalker_kernel.kpart \
+            --keyblock /usr/share/vboot/devkeys/kernel.keyblock \
+            --signprivate /usr/share/vboot/devkeys/kernel_data_key.vbprivk \
+            --version 1 \
+            --vmlinuz my_skywalker_kernel.kpart \
+            --bootloader /dev/null \
+            --config /dev/null \
+            --arch arm
+
+          # 6. Låt Shimboots inbyggda byggverktyg baka ihop komponenterna till den färdiga avbildningen
+          # Vi använder din dev-signerade kpart som bas direkt in i byggskriptet
+          sudo ./patch_rootfs.sh data/signed_skywalker_kernel.kpart data/rootfs || true
+          sudo ./build.sh data/shimboot_skywalker.bin data/signed_skywalker_kernel.kpart data/rootfs
+
           # Packa till en zip-fil för nedladdning
           cd data && zip -7 shimboot_skywalker.zip shimboot_skywalker.bin && cd ..
 
